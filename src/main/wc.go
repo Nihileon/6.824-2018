@@ -2,8 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"mapreduce"
 	"os"
+	"strconv"
+	"strings"
+	"unicode"
 )
 
 //
@@ -15,6 +19,14 @@ import (
 //
 func mapF(filename string, contents string) []mapreduce.KeyValue {
 	// Your code here (Part II).
+	words := strings.FieldsFunc(contents, func(r rune) bool {
+		return !unicode.IsLetter(r)
+	})
+	KVs := make([]mapreduce.KeyValue, 0)
+	for _, word := range words {
+		KVs = append(KVs, mapreduce.KeyValue{Key: word, Value: "1"})
+	}
+	return KVs
 }
 
 //
@@ -23,6 +35,15 @@ func mapF(filename string, contents string) []mapreduce.KeyValue {
 // any map task.
 //
 func reduceF(key string, values []string) string {
+	count := 0
+	for _, value := range values {
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			log.Fatal("atoi", err)
+		}
+		count += i
+	}
+	return strconv.Itoa(count)
 	// Your code here (Part II).
 }
 
