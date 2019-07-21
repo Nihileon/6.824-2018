@@ -696,6 +696,7 @@ func TestFigure82C(t *testing.T) {
 	cfg.end()
 }
 
+
 func TestUnreliableAgree2C(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, true)

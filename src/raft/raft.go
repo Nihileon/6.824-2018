@@ -64,7 +64,7 @@ type Raft struct {
     commitIndex int //index of highest log entry known to be committed (initialized to 0, increases monotonically)
     lastApplied int //index of highest log entry applied to state machine (永远小于commit)(initialized to 0, increases monotonically)
 
-    //Volatile state on leaders:（TODO 选举后重新初始化
+    //Volatile state on leaders:
     nextIndex  []int //for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
     matchIndex []int //for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 
@@ -109,7 +109,8 @@ func (rf *Raft) GetState() (int, bool) {
     // Your code here (2A).
     rf.mu.Lock()
     defer rf.mu.Unlock()
-    return rf.currentTerm, rf.state == LEADER
+    state := atomic.LoadInt32(&rf.state)
+    return rf.currentTerm, state == LEADER
 }
 
 //
@@ -178,25 +179,23 @@ type RequestVoteReply struct {
 //
 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-    // TODO 收到投票请求时先检查term再检查lastlogIndex ⭕
-    DPrintf("%d reply %d's vote request", rf.me, args.CandidateId)
-    DPrintf("candidate's term:%d, logIndex:%d, follower's term:%d, logIndex:%d, votefor:%d", args.Term, args.LastLogIndex, rf.currentTerm, len(rf.log)-1, rf.votedFor)
+    //DPrintf(("%d reply %d's vote request", rf.me, args.CandidateId)
+    //DPrintf(("candidate's term:%d, logIndex:%d, follower's term:%d, logIndex:%d, votefor:%d", args.Term, args.LastLogIndex, rf.currentTerm, len(rf.log)-1, rf.votedFor)
     rf.mu.Lock()
     defer rf.mu.Unlock()
-    //DPrintf("%d vote rpc handler %d", rf.me, args.CandidateId)
+    ////DPrintf(("%d vote rpc handler %d", rf.me, args.CandidateId)
     logIndex := len(rf.log) - 1
     reply.IsVoteGranted = false
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         return
     } else if args.Term == rf.currentTerm {
-        DPrintf("%d.currentTerm == %d.term", rf.me, args.CandidateId)
+        //DPrintf(("%d.currentTerm == %d.term", rf.me, args.CandidateId)
         reply.Term = args.Term
         if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-            //TODO 考虑什么时候重置Votefor
             rf.votedFor = args.CandidateId
             reply.IsVoteGranted = true
-            DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
+            //DPrintf(("%d agree %d's vote request", rf.me, args.CandidateId)
 
         }
     } else {
@@ -205,12 +204,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.currentTerm = args.Term
         rf.votedFor = args.CandidateId
         rf.newState(FOLLOWER)
-        DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
+        //DPrintf(("%d agree %d's vote request", rf.me, args.CandidateId)
 
     }
 
     if args.LastLogTerm < rf.log[logIndex].Term ||
-        (args.LastLogTerm == rf.log[logIndex].Term && args.LastLogIndex > logIndex) {
+        (args.LastLogTerm == rf.log[logIndex].Term && args.LastLogIndex < logIndex) {
         reply.IsVoteGranted = false
         return
     }
@@ -219,20 +218,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf *Raft) initIndex() {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
     rf.matchIndex = make([]int, len(rf.peers))
     rf.nextIndex = make([]int, len(rf.peers))
     for i := 0; i < len(rf.peers); i++ {
         rf.matchIndex[i] = 0
-        rf.nextIndex[i] = len(rf.log) //TODO 初始化为leader的logIndex +1
+        rf.nextIndex[i] = len(rf.log)
     }
 }
 
 func (rf *Raft) CallVote() {
     rf.mu.Lock()
+    defer rf.mu.Unlock()
     rf.currentTerm++
     rf.votedFor = rf.me
     rf.votedCount = 1
-    rf.mu.Unlock()
     rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
     for i, _ := range rf.peers {
         if i == rf.me {
@@ -250,7 +251,8 @@ func (rf *Raft) CallVote() {
         }
         go func(server int) {
             var reply RequestVoteReply
-            if atomic.LoadInt32(&rf.state) == CANDIDATE && rf.sendRequestVote(server, &args, &reply) {
+            isOK := rf.sendRequestVote(server, &args, &reply)
+            if atomic.LoadInt32(&rf.state) == CANDIDATE && isOK {
                 rf.mu.Lock()
                 defer rf.mu.Unlock()
                 if reply.IsVoteGranted == true {
@@ -258,8 +260,6 @@ func (rf *Raft) CallVote() {
                 } else if reply.Term > rf.currentTerm {
                     rf.currentTerm = reply.Term
                     rf.newState(FOLLOWER)
-                    //TODO 如果被拒绝投票，且返回了一个较大的号数
-                    // 甚至可能出现-1？
                 }
             } else {
             }
@@ -269,7 +269,6 @@ func (rf *Raft) CallVote() {
 
 //AppendEntries RPC
 type AppendEntitiesArgs struct {
-    //TODO AppendEntities ✅
     Term         int         // leader's term
     LeaderID     int         //so follower can redirect clients
     PrevLogIndex int         //index of log entry immediately preceding new ones PrevLogIndex应该是之前领导者发送过去的日志的最后一条的索引，不是跟随者日志的长度，也不是领导者日志的长度
@@ -300,8 +299,6 @@ func Min(a int, b int) int {
 
 // AppendEntities RPC handler.
 func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesReply) {
-
-    //TODO 需要考虑任期和leader的id号(是否会在一个任期内出现多个leader ❌
     rf.mu.Lock()
     defer rf.mu.Unlock()
     if args.Term < rf.currentTerm {
@@ -313,16 +310,14 @@ func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesRe
     reply.Term = args.Term
     rf.currentTerm = args.Term
     rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
-    DPrintf("%d reset timeout", rf.me)
+    //DPrintf(("%d reset timeout", rf.me)
     rf.currentLeaderID = args.LeaderID
     if args.Term > rf.currentTerm {
         rf.newState(FOLLOWER)
     } else {
-        rf.state = FOLLOWER
+        atomic.StoreInt32(&rf.state, FOLLOWER)
     }
-    DPrintf("%d handle %d's heartbeat,args.term=%d, rf.term=%d", rf.me, args.LeaderID, args.Term, rf.currentTerm)
-    //TODO 此处应该用的len(rf.log)还是rf.log[last].index?
-    //TODO 如果日志在 prevLogIndex 位置处的日志条目的任期号和 prevLogTerm 不匹配，则返回 false （5.3 节） ✅
+    //DPrintf(("%d handle %d's heartbeat,args.term=%d, rf.term=%d", rf.me, args.LeaderID, args.Term, rf.currentTerm)
     if args.PrevLogIndex > len(rf.log)-1 || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
         //此处表明了backIndex一定会在prevLogIndex之下
         backToIndex := Min(len(rf.log)-1, args.PrevLogIndex)
@@ -336,13 +331,10 @@ func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesRe
         return
     } // else args.PrevLogIndex <= len(rf.log)-1 && rf.log[args.prevLogIndex].Term == args.PrevLogTerm
 
-    //TODO 如果该peer内的任期小于心跳包的任期， 是否应该更新状态，还是只需要直接设置即可 ❓
-
     reply.IsSuccess = true
     var i int
     prevLogIndex := args.PrevLogIndex
 
-    //TODO 如果已经存在的日志条目和新的产生冲突（索引值相同但是任期号不同），删除这一条和之后所有的附加日志中尚未存在的任何新条目 ✅
     for i = 0; i < len(args.Entities) && i < len(rf.log)-1-prevLogIndex; i++ {
         if rf.log[prevLogIndex+i+1].Index != args.Entities[i].Index ||
             rf.log[prevLogIndex+i+1].Term != args.Entities[i].Term {
@@ -352,29 +344,19 @@ func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesRe
 
     rf.log = append(rf.log[:prevLogIndex+i+1], args.Entities[i:]...)
 
-    //TODO 如果 leaderCommit > commitIndex，令 commitIndex 等于 leaderCommit 和 新日志条目索引值中较小的一个 ✅
     rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
-    DPrintf("%d current commit index:%d, leader's commit index:%d", rf.me, rf.commitIndex, args.LeaderCommit)
+    //DPrintf(("%d current commit index:%d, leader's commit index:%d", rf.me, rf.commitIndex, args.LeaderCommit)
     go rf.applyLog()
 
 }
 
 func (rf *Raft) SendEntities() {
-    DPrintf("current log num:%d", len(rf.log))
-    //TODO 万一是由于没有收到leader发出的包而发起❓
-    //TODO 如果有日志来了，则发送日志，否则发送的是心跳包⭕
-    // 发送日志时需要注意的是：AppendEntitiesArgs中的PrevLogIndex是指给对方发出的最后一条的索引号，PrevLogTerm为发出去的上一条的任期，
-    // LeaderCommit 则为现任leader的commit号
-    // TODO 需要处理的是，我怎么知道我需要发出的长度？
+    //DPrintf(("current log num:%d", len(rf.log))
     //注意发送方一定是leader， leader一定不会覆盖自己的记录
-
-    //TODO 对每一个的发送都需要进行循环检查，每当发送失败就进行回退（利用nextindex，回退到上一个term的commit，直到能够匹配上并复制日志才可。
-    //TODO 检查任期，如果返回的任期大于当前值则说明任期有问题，将自己变为follower，否则进行回退
     for i, _ := range rf.peers {
         if i == rf.me {
             continue
         }
-        // TODO 添加所有参数✅
         if atomic.LoadInt32(&rf.state) != LEADER {
             return
         }
@@ -383,19 +365,16 @@ func (rf *Raft) SendEntities() {
 }
 
 func (rf *Raft) sendEntitiesLoop(server int) {
-    DPrintf("%d send heartbeat to %d", rf.me, server)
+    //DPrintf(("%d send heartbeat to %d", rf.me, server)
     rf.mu.Lock()
-    DPrintf("match index %d, log len:%d", rf.matchIndex[server], len(rf.log))
+    //DPrintf(("match index %d, log len:%d", rf.matchIndex[server], len(rf.log))
     args := AppendEntitiesArgs{
         Term:         rf.currentTerm,
         LeaderID:     rf.me,
         PrevLogIndex: rf.matchIndex[server],
         PrevLogTerm:  rf.log[rf.matchIndex[server]].Term,
-        Entities:     nil,
+        Entities:     rf.log[rf.matchIndex[server]+1:],
         LeaderCommit: rf.commitIndex}
-    if rf.matchIndex[server] < len(rf.log)-1 {
-        args.Entities = rf.log[rf.matchIndex[server]+1:]
-    }
     rf.mu.Unlock()
     var reply AppendEntitiesReply
     for ; atomic.LoadInt32(&rf.state) == LEADER; {
@@ -409,16 +388,14 @@ func (rf *Raft) sendEntitiesLoop(server int) {
                 rf.currentTerm = reply.Term
                 rf.newState(FOLLOWER)
             } else if !reply.IsSuccess && reply.BackToIndex < rf.matchIndex[server] {
-
                 backToIndex := reply.BackToIndex
                 rf.matchIndex[server] = backToIndex
                 args.PrevLogIndex = backToIndex
                 args.PrevLogTerm = rf.log[backToIndex].Term
-                //TODO 判断此处的log index是否一定小于len(rf.log)-1 rpc handler已经保证了此处必定会小于✅
                 //发送时只需要发送其下一个到末尾即可
                 args.Entities = rf.log[backToIndex+1:]
             } else if reply.IsSuccess {
-                DPrintf("success")
+                //DPrintf(("success")
                 rf.matchIndex[server] = len(rf.log) - 1
                 rf.mu.Unlock()
                 return
@@ -426,15 +403,6 @@ func (rf *Raft) sendEntitiesLoop(server int) {
         }
         rf.mu.Unlock()
     }
-    //if atomic.LoadInt32(&rf.state) == LEADER && rf.sendAppendEntities(server, &args, &reply) {
-    //    rf.mu.Lock()
-    //    defer rf.mu.Unlock()
-    //    if reply.IsSuccess == false && reply.Term > rf.currentTerm {
-    //        rf.currentTerm = reply.Term
-    //        rf.newState(FOLLOWER)
-    //    }
-    //} else {
-    //}
 }
 
 //
@@ -478,7 +446,7 @@ func (rf *Raft) sendAppendEntities(server int, args *AppendEntitiesArgs, reply *
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log.
-// TODO if this server isn't the leader, returns false. otherwise start the agreement and return immediately.
+// if this server isn't the leader, returns false. otherwise start the agreement and return immediately.
 // there is no guarantee that this
 // command will ever be committed to the Raft log, since the leader
 // may fail or lose an election. even if the Raft instance has been killed,
@@ -530,16 +498,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
     rf.persister = persister
     rf.me = me
 
-    rf.currentTerm = 0             //初始0， 自增1
-    rf.votedFor = -1               //
-    rf.log = make([]LogEntity, 1)  // 初始index 1
-    rf.commitIndex = 0             //初始0
-    rf.lastApplied = 0             //初始0
-    rf.nextIndex = make([]int, 0)  //初始为leader的最新log index + 1
-    rf.matchIndex = make([]int, 0) // 初始为0， 自增1
-    rf.state = FOLLOWER            //所有raft开始都是follower
-    rf.applyCh = applyCh           //
-    rf.votedCount = 0              // 票数初始化为0
+    rf.currentTerm = 0                     //初始0， 自增1
+    rf.votedFor = -1                       //
+    rf.log = make([]LogEntity, 1)          // 初始index 1
+    rf.commitIndex = 0                     //初始0
+    rf.lastApplied = 0                     //初始0
+    rf.nextIndex = make([]int, 0)          //初始为leader的最新log index + 1
+    rf.matchIndex = make([]int, 0)         // 初始为0， 自增1
+    atomic.StoreInt32(&rf.state, FOLLOWER) //所有raft开始都是follower
+    rf.applyCh = applyCh                   //
+    rf.votedCount = 0                      // 票数初始化为0
+    rand.Seed(time.Now().Unix())
     rf.timer = time.NewTimer(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
     // Your initialization code here (2A, 2B, 2C).
 
@@ -552,23 +521,27 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func (rf *Raft) newState(state int32) {
     atomic.StoreInt32(&rf.state, state)
-    rf.state = state
-
-    switch atomic.LoadInt32(&rf.state) {
+    switch state {
     case CANDIDATE:
+        rf.mu.Lock()
         rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
+        rf.mu.Unlock()
         rf.CallVote()
     case FOLLOWER:
         rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
         rf.votedFor = -1
     case LEADER:
+        rf.mu.Lock()
         rf.timer.Reset(RandDuration(HEARTBEAT_TIMEOUT_MIN, HEARTBEAT_TIMEOUT_MAX))
+        rf.mu.Unlock()
         rf.initIndex()
         rf.SendEntities()
     }
 }
 
 func (rf *Raft) canCommit(logIndex int) bool {
+    rf.mu.Lock()
+    defer rf.mu.Unlock()
     count := 1
     if len(rf.peers) == 1 {
         return true
@@ -587,7 +560,6 @@ func (rf *Raft) canCommit(logIndex int) bool {
 func (rf *Raft) StateLoop() {
     for {
         time.Sleep(10 * time.Millisecond)
-        //TODO 对于所有peer 如果commitIndex > lastApplied，那么就 lastApplied 加一，并把log[lastApplied]应用到状态机中
         switch atomic.LoadInt32(&rf.state) {
         case FOLLOWER:
             select {
@@ -597,33 +569,32 @@ func (rf *Raft) StateLoop() {
 
             }
         case LEADER:
-            /*
-               TODO  如果接收到来自客户端的请求：附加条目到本地日志中，在条目被应用到状态机后响应客户端（5.3 节）
-                   如果对于一个跟随者，最后日志条目的索引值大于等于 nextIndex，那么：发送从 nextIndex 开始的所有日志条目：
-                   如果成功：更新相应跟随者的 nextIndex 和 matchIndex
-                   如果因为日志不一致而失败，减少 nextIndex 重试
-                   如果存在一个满足N > commitIndex的 N，并且大多数的matchIndex[i] ≥ N成立，并且log[N].term == currentTerm成立，
-                   那么令 commitIndex 等于这个 N （5.3 和 5.4 节）
-            */
             select {
             case <-rf.timer.C:
-                //TODO 增加一个成功发送数的记录，每次发送时重置，当大于1/2的时候增加commit数
                 rf.timer.Reset(RandDuration(HEARTBEAT_TIMEOUT_MIN, HEARTBEAT_TIMEOUT_MAX))
                 rf.SendEntities()
             default:
                 for ; rf.canCommit(rf.commitIndex + 1); {
+                    rf.mu.Lock()
                     rf.commitIndex++
+                    rf.mu.Unlock()
                 }
                 go rf.applyLog()
             }
         case CANDIDATE:
             select {
             case <-rf.timer.C:
+                rf.mu.Lock()
                 rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
+                rf.mu.Unlock()
                 rf.CallVote()
             default:
-                if rf.votedCount > len(rf.peers)/2 {
-                    DPrintf("%d become leader", rf.me)
+                rf.mu.Lock()
+                votedCount := rf.votedCount
+                peerNum := len(rf.peers)
+                rf.mu.Unlock()
+                if votedCount > peerNum/2 {
+                    //DPrintf(("%d become leader", rf.me)
                     rf.newState(LEADER)
                 }
             }
