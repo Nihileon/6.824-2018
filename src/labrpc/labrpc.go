@@ -97,7 +97,7 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 	case e.ch <- req:
 		// ok
 	case <-e.done:
-		log.Println("call failed <-done")
+		//log.Println("call failed <-done")
 		return false
 	}
 
@@ -110,7 +110,7 @@ func (e *ClientEnd) Call(svcMeth string, args interface{}, reply interface{}) bo
 		}
 		return true
 	} else {
-		log.Println("call failed reply not ok")
+		//log.Println("call failed reply not ok")
 		return false
 	}
 }
