@@ -245,7 +245,7 @@ func (rf *Raft) initIndex() {
     rf.matchIndex = make([]int, len(rf.peers))
     rf.nextIndex = make([]int, len(rf.peers))
     for i := 0; i < len(rf.peers); i++ {
-        rf.matchIndex[i] = 0
+        rf.matchIndex[i] = len(rf.log) -1
         rf.nextIndex[i] = len(rf.log)
     }
 }
