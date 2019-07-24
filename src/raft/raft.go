@@ -198,25 +198,27 @@ type RequestVoteReply struct {
 //
 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-    DPrintf("%d reply %d's vote request", rf.me, args.CandidateId)
-    DPrintf("candidate's term:%d, logIndex:%d, follower's term:%d, logIndex:%d, votefor:%d", args.Term, args.LastLogIndex, rf.currentTerm, len(rf.log)-1, rf.votedFor)
+    //DPrintf("%d reply %d's vote request", rf.me, args.CandidateId)
+    //DPrintf("candidate's term:%d, logIndex:%d, follower's term:%d, logIndex:%d, votefor:%d", args.Term, args.LastLogIndex, rf.currentTerm, len(rf.log)-1, rf.votedFor)
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
-    //DPrintf("%d vote rpc handler %d", rf.me, args.CandidateId)
+
+    ////DPrintf("%d vote rpc handler %d", rf.me, args.CandidateId)
     logIndex := len(rf.log) - 1
     reply.IsVoteGranted = false
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         return
     } else if args.Term == rf.currentTerm {
-        DPrintf("%d.currentTerm == %d.term", rf.me, args.CandidateId)
+        //DPrintf("%d.currentTerm == %d.term", rf.me, args.CandidateId)
         reply.Term = args.Term
         if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
             rf.votedFor = args.CandidateId
             reply.IsVoteGranted = true
             atomic.StoreInt32(&rf.state, FOLLOWER)
             rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
-            DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
+            //DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
 
         }
     } else {
@@ -227,7 +229,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.votedFor = args.CandidateId
         atomic.StoreInt32(&rf.state, FOLLOWER)
         rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
-        DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
+        //DPrintf("%d agree %d's vote request", rf.me, args.CandidateId)
     }
 
     if args.LastLogTerm < rf.log[logIndex].Term ||
@@ -241,18 +243,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) initIndex() {
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
+
     rf.matchIndex = make([]int, len(rf.peers))
     rf.nextIndex = make([]int, len(rf.peers))
     for i := 0; i < len(rf.peers); i++ {
-        rf.matchIndex[i] = len(rf.log) -1
+        rf.matchIndex[i] = len(rf.log) - 1
         rf.nextIndex[i] = len(rf.log)
     }
 }
 
 func (rf *Raft) CallVote() {
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
+
     rf.currentTerm++
     rf.persist()
     rf.votedFor = rf.me
@@ -277,7 +283,9 @@ func (rf *Raft) CallVote() {
             isOK := rf.sendRequestVote(server, &args, &reply)
             if atomic.LoadInt32(&rf.state) == CANDIDATE && isOK {
                 rf.mu.Lock()
+
                 defer rf.mu.Unlock()
+
                 if reply.IsVoteGranted == true {
                     rf.votedCount++
                 } else if reply.Term > rf.currentTerm {
@@ -324,7 +332,9 @@ func Min(a int, b int) int {
 // AppendEntities RPC handler.
 func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesReply) {
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
+    // defer 
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         reply.IsSuccess = false
@@ -335,14 +345,14 @@ func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesRe
     rf.currentTerm = args.Term
     rf.persist()
     rf.timer.Reset(RandDuration(ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX))
-    DPrintf("%d reset timeout", rf.me)
+    //DPrintf("%d reset timeout", rf.me)
     rf.currentLeaderID = args.LeaderID
     if args.Term > rf.currentTerm {
         rf.newState(FOLLOWER)
     } else {
         atomic.StoreInt32(&rf.state, FOLLOWER)
     }
-    DPrintf("%d handle %d's heartbeat,args.term=%d, rf.term=%d", rf.me, args.LeaderID, args.Term, rf.currentTerm)
+    //DPrintf("%d handle %d's heartbeat,args.term=%d, rf.term=%d", rf.me, args.LeaderID, args.Term, rf.currentTerm)
     if args.PrevLogIndex > len(rf.log)-1 || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
         //此处表明了backIndex一定会在prevLogIndex之下
         backToIndex := Min(len(rf.log)-1, args.PrevLogIndex)
@@ -370,14 +380,15 @@ func (rf *Raft) AppendEntities(args *AppendEntitiesArgs, reply *AppendEntitiesRe
     rf.log = append(rf.log[:prevLogIndex+i+1], args.Entities[i:]...)
 
     rf.commitIndex = Min(args.LeaderCommit, len(rf.log)-1)
-    DPrintf("%d current commit index:%d, leader's commit index:%d", rf.me, rf.commitIndex, args.LeaderCommit)
+    //DPrintf("%d current commit index:%d, apply Index %d, leader's commit index:%d", rf.me, rf.commitIndex, rf.lastApplied, args.LeaderCommit)
     go rf.applyLog()
     rf.persist()
+
 }
 
 func (rf *Raft) SendEntities() {
-    DPrintf("current log num:%d", len(rf.log))
     //注意发送方一定是leader， leader一定不会覆盖自己的记录
+    //DPrintf("leader %d current log num:%d, commit num:%d, apply index:%d", rf.me, len(rf.log), rf.commitIndex, rf.lastApplied)
     for i, _ := range rf.peers {
         if i == rf.me {
             continue
@@ -390,9 +401,9 @@ func (rf *Raft) SendEntities() {
 }
 
 func (rf *Raft) sendEntitiesLoop(server int) {
-    DPrintf("%d send heartbeat to %d", rf.me, server)
+    //DPrintf("%d send heartbeat to %d", rf.me, server)
     rf.mu.Lock()
-    DPrintf("match index %d, log len:%d", rf.matchIndex[server], len(rf.log))
+    //DPrintf("match index %d, log len:%d", rf.matchIndex[server], len(rf.log))
     args := AppendEntitiesArgs{
         Term:         rf.currentTerm,
         LeaderID:     rf.me,
@@ -405,8 +416,10 @@ func (rf *Raft) sendEntitiesLoop(server int) {
     for ; atomic.LoadInt32(&rf.state) == LEADER; {
         isOK := rf.sendAppendEntities(server, &args, &reply)
         rf.mu.Lock()
+
         if !isOK {
             rf.mu.Unlock()
+
             return
         } else {
             if !reply.IsSuccess && reply.Term > rf.currentTerm {
@@ -421,13 +434,15 @@ func (rf *Raft) sendEntitiesLoop(server int) {
                 //发送时只需要发送其下一个到末尾即可
                 args.Entities = rf.log[backToIndex+1:]
             } else if reply.IsSuccess {
-                DPrintf("success")
+                //DPrintf("success")
                 rf.matchIndex[server] = len(rf.log) - 1
                 rf.mu.Unlock()
+
                 return
             }
         }
         rf.mu.Unlock()
+
     }
 }
 
@@ -484,16 +499,22 @@ func (rf *Raft) sendAppendEntities(server int, args *AppendEntitiesArgs, reply *
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+    //DPrintf("append log")
     var index int
     // Your code here (2B).
     term, isLeader := rf.GetState()
     if isLeader == true {
+        DPrintf("start try ")
         rf.mu.Lock()
+
         defer rf.mu.Unlock()
+
         index = len(rf.log)
+        //DPrintf("index :%d", index)
         rf.log = append(rf.log, LogEntity{Command: command, Term: term, Index: index})
         rf.persist()
     }
+    //DPrintf("append log return  %d", rf.me)
     return index, term, isLeader
 }
 
@@ -568,7 +589,9 @@ func (rf *Raft) newState(state int32) {
 
 func (rf *Raft) canCommit(logIndex int) bool {
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
+
     count := 1
     if logIndex > len(rf.log)-1 {
         return false
@@ -609,16 +632,20 @@ func (rf *Raft) StateLoop() {
                 rf.SendEntities()
             default:
                 rf.mu.Lock()
+
                 i := rf.commitIndex
                 if rf.log[i].Term != rf.currentTerm {
                     for ; i < len(rf.log) && rf.log[i].Term != rf.currentTerm; i++ {
                     }
                 }
                 rf.mu.Unlock()
+
                 for ; rf.canCommit(i); i++ {
                     rf.mu.Lock()
+
                     rf.commitIndex = i
                     rf.mu.Unlock()
+
                 }
                 go rf.applyLog()
             }
@@ -631,11 +658,13 @@ func (rf *Raft) StateLoop() {
                 rf.CallVote()
             default:
                 rf.mu.Lock()
+
                 votedCount := rf.votedCount
                 peerNum := len(rf.peers)
                 rf.mu.Unlock()
+
                 if votedCount > peerNum/2 {
-                    DPrintf("%d become leader", rf.me)
+                    //DPrintf("%d become leader", rf.me)
                     rf.newState(LEADER)
                 }
             }
@@ -646,7 +675,9 @@ func (rf *Raft) StateLoop() {
 
 func (rf *Raft) applyLog() {
     rf.mu.Lock()
+
     defer rf.mu.Unlock()
+
     if rf.commitIndex > rf.lastApplied {
         for i := rf.lastApplied + 1; i < rf.commitIndex+1; i++ {
             msg := ApplyMsg{
@@ -659,4 +690,5 @@ func (rf *Raft) applyLog() {
         }
 
     }
+
 }

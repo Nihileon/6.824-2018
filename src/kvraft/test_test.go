@@ -232,10 +232,10 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
-			// won't return until that server discovers a new term
+			// won't return until that server discovers a new Term
 			// has started.
 			cfg.ConnectAll()
-			// wait for a while so that we have a new term
+			// wait for a while so that we have a new Term
 			time.Sleep(electionTimeout)
 		}
 
@@ -374,10 +374,10 @@ func GenericTestLinearizability(t *testing.T, part string, nclients int, nserver
 			<-ch_partitioner
 			// reconnect network and submit a request. A client may
 			// have submitted a request in a minority.  That request
-			// won't return until that server discovers a new term
+			// won't return until that server discovers a new Term
 			// has started.
 			cfg.ConnectAll()
-			// wait for a while so that we have a new term
+			// wait for a while so that we have a new Term
 			time.Sleep(electionTimeout)
 		}
 
